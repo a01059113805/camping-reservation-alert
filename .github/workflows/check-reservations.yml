@@ -1,0 +1,51 @@
+name: Check reservations
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1이면 실제 알림/상태저장 없이 확인만"
+        default: "0"
+      seed_only:
+        description: "1이면 현재 예약완료 건을 알림 없이 시드"
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r scripts/requirements.txt
+
+      - name: Run check
+        env:
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+          ADMIN_PW: ${{ secrets.ADMIN_PW }}
+          LOGIN_URL: ${{ secrets.LOGIN_URL }}
+          LIST_URL: ${{ secrets.LIST_URL }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          SEED_ONLY: ${{ github.event.inputs.seed_only || '0' }}
+        run: python scripts/check_reservations.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "reservation-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if ! git diff --quiet -- data/notified_ids.json; then
+            git add data/notified_ids.json
+            git commit -m "chore: update notified reservation ids"
+            git push
+          fi
