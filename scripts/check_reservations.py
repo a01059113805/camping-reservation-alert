@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""30분마다 실행되어 예약현황 페이지에서 새로 '예약완료'된 건을 찾아 웹푸시로 알린다.
+"""30분마다 실행되어 예약현황 페이지에서 새로 '예약완료'된 건을 찾아
+웹푸시로 알리고 구글 캘린더에 일정을 등록한다.
 
 필요 환경변수:
-  ADMIN_ID, ADMIN_PW      예약 관리자 로그인 계정
-  LOGIN_URL               로그인 POST 대상 URL (기본값: 홈페이지 XE 로그인)
-  LIST_URL                예약현황 목록 조회 URL (상태=예약완료 필터가 걸린 상태의 URL을 그대로 넣어야 함)
-  VAPID_PRIVATE_KEY       웹푸시 VAPID 개인키
-  VAPID_SUBJECT           mailto:본인이메일 형식
-  PUSH_SUBSCRIPTION       구독 페이지에서 복사한 JSON 문자열
-  STATE_FILE              이미 알린 예약번호를 저장하는 파일 경로 (기본값: data/notified_ids.json)
-  DRY_RUN                 "1"이면 실제 발송/상태저장 없이 콘솔에만 출력
+  ADMIN_ID, ADMIN_PW          예약 관리자 로그인 계정
+  LOGIN_URL                   로그인 POST 대상 URL (기본값: 홈페이지 XE 로그인)
+  LIST_URL                    예약현황 목록 조회 URL (상태=예약완료 필터가 걸린 상태의 URL을 그대로 넣어야 함)
+  VAPID_PRIVATE_KEY           웹푸시 VAPID 개인키
+  VAPID_SUBJECT               mailto:본인이메일 형식
+  PUSH_SUBSCRIPTION           구독 페이지에서 복사한 JSON 문자열
+  GOOGLE_SERVICE_ACCOUNT_JSON 구글 서비스 계정 키(JSON) 전체 문자열
+  GOOGLE_CALENDAR_ID          일정을 등록할 구글 캘린더 ID (서비스 계정과 공유되어 있어야 함)
+  STATE_FILE                  이미 알린 예약번호를 저장하는 파일 경로 (기본값: data/notified_ids.json)
+  DRY_RUN                     "1"이면 실제 발송/등록/상태저장 없이 콘솔에만 출력
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
 
 import requests
 from bs4 import BeautifulSoup
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from pywebpush import WebPushException, webpush
 
 BASE_URL = "http://pscamp.hana-pnc.co.kr"
@@ -162,6 +168,58 @@ def send_push(reservation: dict) -> None:
         raise
 
 
+def parse_date_range(date_str: str, today: datetime.date | None = None) -> tuple[datetime.date, datetime.date]:
+    """'08-02~08-03' 같은 문자열을 (체크인, 체크아웃) date로 변환한다.
+
+    목록에 연도가 표시되지 않으므로 오늘 날짜를 기준으로 연도를 추정한다.
+    """
+    today = today or datetime.date.today()
+    if "~" in date_str:
+        start_raw, end_raw = date_str.split("~", 1)
+    else:
+        start_raw = end_raw = date_str
+
+    def to_date(raw: str) -> datetime.date:
+        month, day = (int(x) for x in raw.strip().split("-"))
+        year = today.year
+        candidate = datetime.date(year, month, day)
+        # 오늘보다 6개월 이상 과거로 보이면 연도가 넘어간 것으로 보고 다음 해로 보정
+        if (today - candidate).days > 180:
+            candidate = datetime.date(year + 1, month, day)
+        return candidate
+
+    start_date = to_date(start_raw)
+    end_date = to_date(end_raw)
+    if end_date <= start_date:
+        end_date = start_date + datetime.timedelta(days=1)
+    return start_date, end_date
+
+
+def get_calendar_service():
+    info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    credentials = service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/calendar"]
+    )
+    return build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+
+def create_calendar_event(reservation: dict) -> None:
+    try:
+        start_date, end_date = parse_date_range(reservation["date"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: {reservation} ({exc})", file=sys.stderr)
+        return
+
+    service = get_calendar_service()
+    event = {
+        "summary": f"[예약확정] {reservation['name']} · {reservation['room']}",
+        "description": f"예약번호: {reservation['id']}\n요금: {reservation['price']}\n상태: {reservation['status']}",
+        "start": {"date": start_date.isoformat()},
+        "end": {"date": end_date.isoformat()},
+    }
+    service.events().insert(calendarId=os.environ["GOOGLE_CALENDAR_ID"], body=event).execute()
+
+
 def main() -> None:
     session = requests.Session()
     login(session)
@@ -184,6 +242,7 @@ def main() -> None:
         print(f"  -> 신규 확정: {r}")
         if not DRY_RUN:
             send_push(r)
+            create_calendar_event(r)
         notified.add(r["id"])
 
     if not DRY_RUN and new_ones:
