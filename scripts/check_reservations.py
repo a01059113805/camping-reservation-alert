@@ -61,9 +61,15 @@ def login(session: requests.Session) -> None:
     resp = session.post(LOGIN_URL, data=payload, timeout=15)
     resp.raise_for_status()
     if DEBUG:
-        print(f"[DEBUG] login status={resp.status_code} final_url={resp.url}", file=sys.stderr)
-        print(f"[DEBUG] login body head: {normalize(resp.text)[:300]}", file=sys.stderr)
-        print(f"[DEBUG] cookies after login: {list(session.cookies.get_dict().keys())}", file=sys.stderr)
+        # 개인정보(예약자명 등)가 로그에 남지 않도록 원문 내용은 출력하지 않고
+        # 로그인 성공 여부를 판단할 수 있는 구조적 정보만 남긴다.
+        looks_like_login_page = "procMemberLogin" in resp.text or "dispMemberLoginForm" in resp.text
+        print(
+            f"[DEBUG] login status={resp.status_code} final_url={resp.url} "
+            f"body_len={len(resp.text)} looks_like_login_page={looks_like_login_page} "
+            f"cookie_names={list(session.cookies.get_dict().keys())}",
+            file=sys.stderr,
+        )
 
 
 def normalize(text: str) -> str:
@@ -135,13 +141,14 @@ def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
         resp.raise_for_status()
         rows = parse_reservations(resp.text)
         if DEBUG:
+            # 원문 HTML(고객 이름 등 개인정보 포함)은 절대 출력하지 않고 구조적 정보만 남긴다.
+            looks_like_login_page = "procMemberLogin" in resp.text or "dispMemberLoginForm" in resp.text
             print(
                 f"[DEBUG] page={page} status={resp.status_code} final_url={resp.url} "
-                f"len={len(resp.text)} has_marker={'예약번호' in resp.text} rows={len(rows)}",
+                f"len={len(resp.text)} has_marker={'예약번호' in resp.text} rows={len(rows)} "
+                f"looks_like_login_page={looks_like_login_page}",
                 file=sys.stderr,
             )
-            if page == 1:
-                print(f"[DEBUG] page1 body head: {normalize(resp.text)[:500]}", file=sys.stderr)
         if not rows:
             break
         page_confirmed = [r for r in rows if is_confirmed(r["status"])]
@@ -231,7 +238,7 @@ def create_calendar_event(reservation: dict) -> None:
     try:
         start_date, end_date = parse_date_range(reservation["date"])
     except Exception as exc:  # noqa: BLE001
-        print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: {reservation} ({exc})", file=sys.stderr)
+        print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: 예약번호={reservation['id']} ({exc})", file=sys.stderr)
         return
 
     service = get_calendar_service()
@@ -263,7 +270,7 @@ def main() -> None:
 
     print(f"확인된 예약완료 건수: {len(confirmed)}, 신규: {len(new_ones)}")
     for r in new_ones:
-        print(f"  -> 신규 확정: {r}")
+        print(f"  -> 신규 확정: 예약번호={r['id']}")
         if not DRY_RUN:
             send_push(r)
             create_calendar_event(r)
