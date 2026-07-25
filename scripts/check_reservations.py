@@ -73,6 +73,12 @@ def login(session: requests.Session) -> None:
             f"cookie_names={list(session.cookies.get_dict().keys())}",
             file=sys.stderr,
         )
+        error_hints = [
+            kw
+            for kw in ["일치하지", "존재하지", "차단", "잠금", "잘못된", "제한", "탈퇴", "승인"]
+            if kw in resp.text
+        ]
+        print(f"[DEBUG] login error_hints={error_hints}", file=sys.stderr)
 
 
 def normalize(text: str) -> str:
