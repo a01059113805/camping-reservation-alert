@@ -8,7 +8,8 @@
   LIST_URL                    예약현황 목록 조회 URL (상태=예약완료 필터가 걸린 상태의 URL을 그대로 넣어야 함)
   VAPID_PRIVATE_KEY           웹푸시 VAPID 개인키
   VAPID_SUBJECT               mailto:본인이메일 형식
-  PUSH_SUBSCRIPTION           구독 페이지에서 복사한 JSON 문자열
+  PUSH_SUBSCRIPTIONS          구독 페이지에서 복사한 JSON을 기기별로 모은 배열 문자열
+                              (기기 1개면 [ {...} ], 여러 기기(아이폰/갤럭시 등)면 [ {...}, {...} ])
   GOOGLE_SERVICE_ACCOUNT_JSON 구글 서비스 계정 키(JSON) 전체 문자열
   GOOGLE_CALENDAR_ID          일정을 등록할 구글 캘린더 ID (서비스 계정과 공유되어 있어야 함)
   STATE_FILE                  이미 알린 예약번호를 저장하는 파일 경로 (기본값: data/notified_ids.json)
@@ -146,8 +147,12 @@ def save_notified_ids(ids: set[str]) -> None:
         json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
 
 
+def load_subscriptions() -> list[dict]:
+    subs = json.loads(os.environ["PUSH_SUBSCRIPTIONS"])
+    return [subs] if isinstance(subs, dict) else subs
+
+
 def send_push(reservation: dict) -> None:
-    subscription = json.loads(os.environ["PUSH_SUBSCRIPTION"])
     payload = json.dumps(
         {
             "title": "새 예약 확정",
@@ -156,16 +161,17 @@ def send_push(reservation: dict) -> None:
         },
         ensure_ascii=False,
     )
-    try:
-        webpush(
-            subscription_info=subscription,
-            data=payload,
-            vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
-            vapid_claims={"sub": os.environ["VAPID_SUBJECT"]},
-        )
-    except WebPushException as exc:
-        print(f"웹푸시 발송 실패: {exc}", file=sys.stderr)
-        raise
+    for subscription in load_subscriptions():
+        try:
+            webpush(
+                subscription_info=subscription,
+                data=payload,
+                vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
+                vapid_claims={"sub": os.environ["VAPID_SUBJECT"]},
+            )
+        except WebPushException as exc:
+            # 기기 하나가 만료/구독취소 됐어도 다른 기기에는 계속 보내야 하므로 여기서 중단하지 않음
+            print(f"웹푸시 발송 실패 (기기 1개, 계속 진행): {exc}", file=sys.stderr)
 
 
 def parse_date_range(date_str: str, today: datetime.date | None = None) -> tuple[datetime.date, datetime.date]:

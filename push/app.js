@@ -45,7 +45,7 @@ async function enablePush() {
   outputEl.textContent = json;
   outputEl.style.display = "block";
   copyBtn.style.display = "inline-block";
-  setStatus("알림이 켜졌습니다. 아래 값을 복사해서 GitHub Secret(PUSH_SUBSCRIPTION)에 붙여넣어주세요.");
+  setStatus("알림이 켜졌습니다. 아래 값을 복사해서 전달해주세요. (기기 여러 대를 등록하려면 각 기기에서 이 값을 모아서 한번에 전달)");
 }
 
 enableBtn.addEventListener("click", enablePush);
