@@ -51,7 +51,10 @@ def login(session: requests.Session) -> None:
     admin_pw = os.environ["ADMIN_PW"]
     payload = {
         "mid": "index",
+        "vid": "",
+        "ruleset": "@login",
         "act": "procMemberLogin",
+        "xe_validator_id": "modules/member/skins",
         "user_id": admin_id,
         "password": admin_pw,
         "keep_signed": "Y",
