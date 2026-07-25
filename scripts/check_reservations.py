@@ -29,13 +29,14 @@ from googleapiclient.discovery import build
 from pywebpush import WebPushException, webpush
 
 BASE_URL = "http://pscamp.hana-pnc.co.kr"
-LOGIN_URL = os.environ.get("LOGIN_URL", f"{BASE_URL}/index.php?act=procMemberLogin")
+# GitHub Actions는 등록 안 된 시크릿도 빈 문자열 env로 넘기므로, os.environ.get의
+# 기본값 인자가 아니라 `or`로 빈 문자열도 기본값으로 대체되게 처리한다.
+LOGIN_URL = os.environ.get("LOGIN_URL") or f"{BASE_URL}/index.php?act=procMemberLogin"
 # 관리자 페이지에서 상태 필터를 "예약완료"(status=1)로 걸고 확인한 실제 목록 URL
-LIST_URL = os.environ.get(
-    "LIST_URL",
+LIST_URL = os.environ.get("LIST_URL") or (
     f"{BASE_URL}/index.php?mid=&vid=&module=admin&act=dispYeyakAdminResList"
     "&islog=&order_type=desc&sort_index=res_srl&list_count=20&hide_room_block="
-    "&cate_srl=&status=1&start_date=&end_date=&searchType=&searchStr=",
+    "&cate_srl=&status=1&start_date=&end_date=&searchType=&searchStr="
 )
 STATE_FILE = os.environ.get("STATE_FILE", "data/notified_ids.json")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
