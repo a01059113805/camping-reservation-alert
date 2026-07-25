@@ -30,9 +30,13 @@ from pywebpush import WebPushException, webpush
 
 BASE_URL = "http://pscamp.hana-pnc.co.kr"
 LOGIN_URL = os.environ.get("LOGIN_URL", f"{BASE_URL}/index.php?act=procMemberLogin")
-# TODO: 실제 로그인 후 개발자도구 Network 탭에서 확인한, "상태=예약완료" 필터가 걸린
-# 예약현황 목록 페이지의 정확한 URL로 교체해야 한다. (아래는 임시 추정값)
-LIST_URL = os.environ.get("LIST_URL", f"{BASE_URL}/index.php?mid=admin&act=dispYeyakAdminList")
+# 관리자 페이지에서 상태 필터를 "예약완료"(status=1)로 걸고 확인한 실제 목록 URL
+LIST_URL = os.environ.get(
+    "LIST_URL",
+    f"{BASE_URL}/index.php?mid=&vid=&module=admin&act=dispYeyakAdminResList"
+    "&islog=&order_type=desc&sort_index=res_srl&list_count=20&hide_room_block="
+    "&cate_srl=&status=1&start_date=&end_date=&searchType=&searchStr=",
+)
 STATE_FILE = os.environ.get("STATE_FILE", "data/notified_ids.json")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 SEED_ONLY = os.environ.get("SEED_ONLY") == "1"
