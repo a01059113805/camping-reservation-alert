@@ -41,6 +41,7 @@ LIST_URL = os.environ.get("LIST_URL") or (
 STATE_FILE = os.environ.get("STATE_FILE", "data/notified_ids.json")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 SEED_ONLY = os.environ.get("SEED_ONLY") == "1"
+DEBUG = os.environ.get("DEBUG") == "1"
 CONFIRMED_KEYWORDS = ["예약완료", "결제완료"]
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
 
@@ -59,6 +60,10 @@ def login(session: requests.Session) -> None:
     }
     resp = session.post(LOGIN_URL, data=payload, timeout=15)
     resp.raise_for_status()
+    if DEBUG:
+        print(f"[DEBUG] login status={resp.status_code} final_url={resp.url}", file=sys.stderr)
+        print(f"[DEBUG] login body head: {normalize(resp.text)[:300]}", file=sys.stderr)
+        print(f"[DEBUG] cookies after login: {list(session.cookies.get_dict().keys())}", file=sys.stderr)
 
 
 def normalize(text: str) -> str:
@@ -129,6 +134,14 @@ def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
         resp = session.get(url, timeout=15)
         resp.raise_for_status()
         rows = parse_reservations(resp.text)
+        if DEBUG:
+            print(
+                f"[DEBUG] page={page} status={resp.status_code} final_url={resp.url} "
+                f"len={len(resp.text)} has_marker={'예약번호' in resp.text} rows={len(rows)}",
+                file=sys.stderr,
+            )
+            if page == 1:
+                print(f"[DEBUG] page1 body head: {normalize(resp.text)[:500]}", file=sys.stderr)
         if not rows:
             break
         page_confirmed = [r for r in rows if is_confirmed(r["status"])]
