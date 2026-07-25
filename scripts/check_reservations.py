@@ -49,6 +49,15 @@ MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
 def login(session: requests.Session) -> None:
     admin_id = os.environ["ADMIN_ID"]
     admin_pw = os.environ["ADMIN_PW"]
+    # 로그인 폼을 먼저 방문해 세션 쿠키를 받아와야 로그인 POST가 같은 세션으로 처리된다.
+    warmup = session.get(f"{BASE_URL}/index.php?mid=index&act=dispMemberLoginForm", timeout=15)
+    warmup.raise_for_status()
+    if DEBUG:
+        print(
+            f"[DEBUG] warmup status={warmup.status_code} "
+            f"cookie_count={len(session.cookies.get_dict())}",
+            file=sys.stderr,
+        )
     payload = {
         "mid": "index",
         "vid": "",
