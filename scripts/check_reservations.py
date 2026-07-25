@@ -43,14 +43,15 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 SEED_ONLY = os.environ.get("SEED_ONLY") == "1"
 DEBUG = os.environ.get("DEBUG") == "1"
 CONFIRMED_KEYWORDS = ["예약완료", "결제완료"]
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "30"))
 
 
 def login(session: requests.Session) -> None:
     admin_id = os.environ["ADMIN_ID"]
     admin_pw = os.environ["ADMIN_PW"]
     # 로그인 폼을 먼저 방문해 세션 쿠키를 받아와야 로그인 POST가 같은 세션으로 처리된다.
-    warmup = session.get(f"{BASE_URL}/index.php?mid=index&act=dispMemberLoginForm", timeout=15)
+    login_form_url = f"{BASE_URL}/index.php?mid=index&act=dispMemberLoginForm"
+    warmup = session.get(login_form_url, timeout=15)
     warmup.raise_for_status()
     if DEBUG:
         print(
@@ -70,7 +71,8 @@ def login(session: requests.Session) -> None:
         "success_return_url": "",
         "error_return_url": "/index.php?mid=index&act=dispMemberLoginForm",
     }
-    resp = session.post(LOGIN_URL, data=payload, timeout=15)
+    # XE는 Referer가 로그인 폼과 다르면 CSRF로 간주해 "잘못된 요청입니다"로 거부한다.
+    resp = session.post(LOGIN_URL, data=payload, timeout=15, headers={"Referer": login_form_url})
     resp.raise_for_status()
     if DEBUG:
         # 개인정보(예약자명 등)가 로그에 남지 않도록 원문 내용은 출력하지 않고
@@ -132,13 +134,21 @@ def parse_reservations(html: str) -> list[dict]:
         if not reservation_id:
             continue
         status = normalize(cells[idx_status].get_text()) if idx_status is not None and idx_status < len(cells) else ""
+
+        name = ""
+        if idx_name is not None and idx_name < len(cells):
+            # 이름 칸에는 문자보내기/전화걸기 등 숨은 드롭다운 메뉴 글자가 같이 들어있어서
+            # get_text()로 그냥 뽑으면 오염된다. 실제 이름은 a-send-sms-btn span에 들어있다.
+            name_span = cells[idx_name].find("span", class_="a-send-sms-btn")
+            name = normalize(name_span.get_text()) if name_span else normalize(cells[idx_name].get_text())
+
         rows.append(
             {
                 "id": reservation_id,
                 "room": normalize(cells[idx_room].get_text()) if idx_room is not None and idx_room < len(cells) else "",
                 "date": normalize(cells[idx_date].get_text()) if idx_date is not None and idx_date < len(cells) else "",
                 "price": normalize(cells[idx_price].get_text()) if idx_price is not None and idx_price < len(cells) else "",
-                "name": normalize(cells[idx_name].get_text()) if idx_name is not None and idx_name < len(cells) else "",
+                "name": name,
                 "status": status,
             }
         )
@@ -168,12 +178,12 @@ def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
                 file=sys.stderr,
             )
         if not rows:
+            # 더 이상 결과가 없는 진짜 끝. 이 목록은 상태=예약완료 필터가 걸려 있어
+            # 입실완료(이미 체크인) 행이 섞여 있어도 is_confirmed()가 걸러내므로,
+            # 중간에 입실완료가 나온다고 페이지를 중단하면 안 된다 (과거엔 이 조건으로
+            # 조기 종료해서 2페이지 이후의 신규 확정 건을 놓치는 버그가 있었다).
             break
-        page_confirmed = [r for r in rows if is_confirmed(r["status"])]
-        confirmed.extend(page_confirmed)
-        if len(page_confirmed) < len(rows):
-            # 이 페이지에 확정이 아닌 행이 섞여 있다는 건 최신순 목록의 끝부분에 도달했다는 뜻
-            break
+        confirmed.extend(r for r in rows if is_confirmed(r["status"]))
     return confirmed
 
 
@@ -262,9 +272,15 @@ def create_calendar_event(reservation: dict) -> None:
     service = get_calendar_service()
     event = {
         "summary": f"[예약확정] {reservation['name']} · {reservation['room']}",
-        "description": f"예약번호: {reservation['id']}\n요금: {reservation['price']}\n상태: {reservation['status']}",
+        "description": (
+            f"성함: {reservation['name']}\n"
+            f"사이트 구역 및 번호: {reservation['room']}\n"
+            f"특이사항: "
+        ),
         "start": {"date": start_date.isoformat()},
         "end": {"date": end_date.isoformat()},
+        # 캠핑장 예약 일정을 한눈에 구분할 수 있도록 색상 고정 (6 = Tangerine)
+        "colorId": "6",
     }
     service.events().insert(calendarId=os.environ["GOOGLE_CALENDAR_ID"], body=event).execute()
 
