@@ -274,8 +274,8 @@ def get_calendar_service():
 
 
 def get_color_id(room: str) -> str:
-    # 평상/테이블/카라반/민박 키워드를 A-/B- 접두사 매칭보다 먼저 확인해야 한다.
-    # "A-1 평상"처럼 평상 사이트명이 A/B사이트와 같은 접두사를 쓰기 때문이다.
+    # 평상/테이블/카라반/민박 키워드를 A/B사이트 매칭보다 먼저 확인해야 한다.
+    # "평상/A-9 평상"처럼 평상 사이트명이 A/B사이트와 같은 표기를 공유하기 때문이다.
     if "카라반" in room:
         return SITE_TYPE_COLORS["카라반"]
     if "민박" in room:
@@ -284,9 +284,11 @@ def get_color_id(room: str) -> str:
         return SITE_TYPE_COLORS["테이블"]
     if "평상" in room:
         return SITE_TYPE_COLORS["평상"]
-    if re.match(r"^A[\s-]", room):
+    # 관리자 객실 필드는 "서숲A사이트/A-6"처럼 카테고리명이 앞에 붙어 오므로
+    # 접두사가 아니라 "A사이트"/"B사이트" 부분 문자열로 매칭한다.
+    if "A사이트" in room or re.match(r"^A[\s-]", room):
         return SITE_TYPE_COLORS["A사이트"]
-    if re.match(r"^B[\s-]", room):
+    if "B사이트" in room or re.match(r"^B[\s-]", room):
         return SITE_TYPE_COLORS["B사이트"]
     return DEFAULT_COLOR_ID
 
