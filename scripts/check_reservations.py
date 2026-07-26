@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import sys
 
 import requests
@@ -44,6 +45,16 @@ SEED_ONLY = os.environ.get("SEED_ONLY") == "1"
 DEBUG = os.environ.get("DEBUG") == "1"
 CONFIRMED_KEYWORDS = ["예약완료", "결제완료"]
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "30"))
+# 구글 캘린더 고정 팔레트(1~11) 중 서로 잘 구분되는 색상을 사이트 종류별로 배정
+SITE_TYPE_COLORS = {
+    "민박": "5",     # Banana (노랑)
+    "카라반": "7",   # Peacock (청록)
+    "A사이트": "9",  # Blueberry (파랑)
+    "B사이트": "3",  # Grape (보라)
+    "평상": "10",    # Basil (초록)
+    "테이블": "4",   # Flamingo (분홍)
+}
+DEFAULT_COLOR_ID = "6"  # 매칭 실패 시 기존 고정색(Tangerine)으로 대체
 
 
 def login(session: requests.Session) -> None:
@@ -262,6 +273,24 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
 
+def get_color_id(room: str) -> str:
+    # 평상/테이블/카라반/민박 키워드를 A-/B- 접두사 매칭보다 먼저 확인해야 한다.
+    # "A-1 평상"처럼 평상 사이트명이 A/B사이트와 같은 접두사를 쓰기 때문이다.
+    if "카라반" in room:
+        return SITE_TYPE_COLORS["카라반"]
+    if "민박" in room:
+        return SITE_TYPE_COLORS["민박"]
+    if "테이블" in room:
+        return SITE_TYPE_COLORS["테이블"]
+    if "평상" in room:
+        return SITE_TYPE_COLORS["평상"]
+    if re.match(r"^A[\s-]", room):
+        return SITE_TYPE_COLORS["A사이트"]
+    if re.match(r"^B[\s-]", room):
+        return SITE_TYPE_COLORS["B사이트"]
+    return DEFAULT_COLOR_ID
+
+
 def create_calendar_event(reservation: dict) -> None:
     try:
         start_date, end_date = parse_date_range(reservation["date"])
@@ -269,18 +298,23 @@ def create_calendar_event(reservation: dict) -> None:
         print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: 예약번호={reservation['id']} ({exc})", file=sys.stderr)
         return
 
+    nights = (end_date - start_date).days
+    stay_label = f"{nights}박{nights + 1}일"
+
     service = get_calendar_service()
     event = {
-        "summary": f"[예약확정] {reservation['name']} · {reservation['room']}",
+        "summary": f"[예약확정] {reservation['name']} · {reservation['room']} ({stay_label})",
         "description": (
             f"성함: {reservation['name']}\n"
             f"사이트 구역 및 번호: {reservation['room']}\n"
             f"특이사항: "
         ),
         "start": {"date": start_date.isoformat()},
-        "end": {"date": end_date.isoformat()},
-        # 캠핑장 예약 일정을 한눈에 구분할 수 있도록 색상 고정 (6 = Tangerine)
-        "colorId": "6",
+        # 구글 캘린더 종일 일정의 end.date는 배타적(그 날은 포함 안 됨)이라
+        # 체크아웃 당일까지 색이 칠해지도록 하루를 더해서 넣는다.
+        "end": {"date": (end_date + datetime.timedelta(days=1)).isoformat()},
+        # 사이트 종류별로 캘린더에서 한눈에 구분되도록 색상 지정
+        "colorId": get_color_id(reservation["room"]),
     }
     service.events().insert(calendarId=os.environ["GOOGLE_CALENDAR_ID"], body=event).execute()
 
