@@ -342,8 +342,14 @@ def main() -> None:
     for r in new_ones:
         print(f"  -> 신규 확정: 예약번호={r['id']}")
         if not DRY_RUN:
-            send_push(r)
-            create_calendar_event(r)
+            try:
+                send_push(r)
+                create_calendar_event(r)
+            except Exception as exc:  # noqa: BLE001
+                # 한 건에서 실패해도 나머지 신규 확정 건은 계속 처리해야 한다.
+                # 이 건은 notified에 추가하지 않아 다음 실행에서 다시 시도된다.
+                print(f"알림/캘린더 처리 실패, 다음 실행에서 재시도: 예약번호={r['id']} ({exc})", file=sys.stderr)
+                continue
         notified.add(r["id"])
 
     if not DRY_RUN and new_ones:
