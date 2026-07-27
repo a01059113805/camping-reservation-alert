@@ -300,12 +300,9 @@ def create_calendar_event(reservation: dict) -> None:
         print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: 예약번호={reservation['id']} ({exc})", file=sys.stderr)
         return
 
-    nights = (end_date - start_date).days
-    stay_label = f"{nights}박{nights + 1}일"
-
     service = get_calendar_service()
     event = {
-        "summary": f"[예약확정] {reservation['name']} · {reservation['room']} ({stay_label})",
+        "summary": f"{reservation['name']} · {reservation['room']}",
         "description": (
             f"성함: {reservation['name']}\n"
             f"사이트 구역 및 번호: {reservation['room']}\n"
