@@ -1,4 +1,5 @@
 .env
 secrets.local.md
+local-secrets/
 __pycache__/
 *.pyc

@@ -1,8 +1,8 @@
 name: Check reservations
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
+  # GitHub Actions 서버 IP가 캠핑장 사이트에서 차단되어 있어 30분 스케줄은 비활성화함.
+  # 실제 자동 실행은 로컬(Mac) launchd로 옮김. 수동 실행/디버깅용으로만 남겨둠.
   workflow_dispatch:
     inputs:
       dry_run:
@@ -40,7 +40,6 @@ jobs:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
           SEED_ONLY: ${{ github.event.inputs.seed_only || '0' }}
-          DEBUG: "1"
         run: python scripts/check_reservations.py
 
       - name: Commit updated state
