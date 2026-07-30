@@ -2,6 +2,9 @@
 """30분마다 실행되어 예약현황 페이지에서 새로 '예약완료'된 건을 찾아
 웹푸시로 알리고 구글 캘린더에 일정을 등록한다.
 
+이름/객실/예약일/요금/전화번호는 목록 페이지에서 한 번에 얻지만, 인원(성인/아동/유아)은
+목록에 없어서 신규 확정 건에 대해서만 예약 상세 페이지를 한 번 더 열어 가져온다.
+
 필요 환경변수:
   ADMIN_ID, ADMIN_PW          예약 관리자 로그인 계정
   LOGIN_URL                   로그인 POST 대상 URL (기본값: 홈페이지 XE 로그인)
@@ -55,6 +58,13 @@ SITE_TYPE_COLORS = {
     "테이블": "4",   # Flamingo (분홍)
 }
 DEFAULT_COLOR_ID = "6"  # 매칭 실패 시 기존 고정색(Tangerine)으로 대체
+# 목록에는 인원 컬럼이 없어서 예약 상세 페이지를 한 번 더 열어야 한다.
+DETAIL_URL_TEMPLATE = f"{BASE_URL}/index.php?module=admin&act=dispYeyakAdminResView&res_srl={{res_srl}}"
+# 상세 페이지 인원 입력칸의 라벨과 input name 대응 (관리자 페이지에서 확인한 값).
+# 사이트가 어른/아이 2단계가 아니라 성인/아동/유아 3단계로 관리하므로 그대로 따라간다.
+HEADCOUNT_FIELDS = [("성인", "n_user_count"), ("아동", "a_user_count"), ("유아", "u_user_count")]
+# 값을 못 가져왔을 때 빈칸으로 두면 "정보 없음"과 "긁기 실패"를 구분할 수 없어 명시한다.
+UNKNOWN_LABEL = "확인 실패 (예약페이지 확인 필요)"
 
 
 def login(session: requests.Session) -> None:
@@ -107,6 +117,19 @@ def normalize(text: str) -> str:
     return " ".join(text.split()).strip()
 
 
+def parse_res_srl(row) -> str:
+    """목록 행에서 상세 페이지 키(res_srl)를 뽑는다.
+
+    행마다 상세보기 링크(act=dispYeyakAdminResView&res_srl=...)가 있고, 같은 행의
+    삭제 링크(ResDelete)도 같은 형식이라 반드시 ResView 링크만 골라야 한다.
+    """
+    link = row.find("a", href=re.compile(r"dispYeyakAdminResView"))
+    if link is None:
+        return ""
+    match = re.search(r"res_srl=(\d+)", link.get("href", ""))
+    return match.group(1) if match else ""
+
+
 def parse_reservations(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     table = None
@@ -147,11 +170,16 @@ def parse_reservations(html: str) -> list[dict]:
         status = normalize(cells[idx_status].get_text()) if idx_status is not None and idx_status < len(cells) else ""
 
         name = ""
+        phone = ""
         if idx_name is not None and idx_name < len(cells):
             # 이름 칸에는 문자보내기/전화걸기 등 숨은 드롭다운 메뉴 글자가 같이 들어있어서
             # get_text()로 그냥 뽑으면 오염된다. 실제 이름은 a-send-sms-btn span에 들어있다.
             name_span = cells[idx_name].find("span", class_="a-send-sms-btn")
             name = normalize(name_span.get_text()) if name_span else normalize(cells[idx_name].get_text())
+            # 전화번호도 같은 칸의 "전화걸기" 드롭다운에 data-tel 속성으로 이미 들어있어서
+            # 상세 페이지를 열지 않고 목록에서 바로 가져올 수 있다 (010-0000-0000 형식).
+            tel_el = cells[idx_name].find(attrs={"data-tel": True})
+            phone = normalize(tel_el["data-tel"]) if tel_el else ""
 
         rows.append(
             {
@@ -160,6 +188,8 @@ def parse_reservations(html: str) -> list[dict]:
                 "date": normalize(cells[idx_date].get_text()) if idx_date is not None and idx_date < len(cells) else "",
                 "price": normalize(cells[idx_price].get_text()) if idx_price is not None and idx_price < len(cells) else "",
                 "name": name,
+                "phone": phone,
+                "res_srl": parse_res_srl(tr),
                 "status": status,
             }
         )
@@ -171,8 +201,13 @@ def is_confirmed(status: str) -> bool:
     return any(keyword in compact for keyword in CONFIRMED_KEYWORDS)
 
 
-def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
-    confirmed = []
+def fetch_reservation_rows(session: requests.Session) -> list[dict]:
+    """목록 전체 페이지의 행을 상태 필터 없이 그대로 모아 온다.
+
+    기존 캘린더 일정을 갱신하는 backfill 스크립트는 이미 입실완료로 바뀐 예약도
+    찾아야 하므로 확정 필터를 걸지 않은 원본 행이 필요하다.
+    """
+    all_rows = []
     for page in range(1, MAX_PAGES + 1):
         sep = "&" if "?" in LIST_URL else "?"
         url = f"{LIST_URL}{sep}page={page}"
@@ -194,8 +229,12 @@ def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
             # 중간에 입실완료가 나온다고 페이지를 중단하면 안 된다 (과거엔 이 조건으로
             # 조기 종료해서 2페이지 이후의 신규 확정 건을 놓치는 버그가 있었다).
             break
-        confirmed.extend(r for r in rows if is_confirmed(r["status"]))
-    return confirmed
+        all_rows.extend(rows)
+    return all_rows
+
+
+def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
+    return [r for r in fetch_reservation_rows(session) if is_confirmed(r["status"])]
 
 
 def load_notified_ids() -> set[str]:
@@ -216,11 +255,83 @@ def load_subscriptions() -> list[dict]:
     return [subs] if isinstance(subs, dict) else subs
 
 
+def fetch_headcount(session: requests.Session, res_srl: str, expected_id: str = "") -> dict[str, int | None]:
+    """예약 상세 페이지에서 성인/아동/유아 인원을 가져온다.
+
+    인원은 목록 표에 없고 상세 페이지의 input value에만 들어있다(칸 텍스트는 '명'뿐이라
+    get_text()로는 못 뽑는다). 신규 확정 건에 대해서만 호출하므로 요청 수는 거의 안 늘어난다.
+
+    없는 res_srl로 요청해도 이 페이지는 200과 함께 인원이 0인 빈 양식을 돌려주기 때문에,
+    'keynum' 값(=예약번호)이 기대한 예약과 같은지 확인해서 엉뚱한 0명을 정상값으로
+    믿는 일이 없게 한다.
+    """
+    resp = session.get(DETAIL_URL_TEMPLATE.format(res_srl=res_srl), timeout=15)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    keynum_el = soup.find("input", attrs={"name": "keynum"})
+    keynum = normalize(keynum_el.get("value") or "") if keynum_el is not None else ""
+    if expected_id and keynum != expected_id:
+        raise ValueError(f"상세 페이지의 예약번호가 목록과 다름 (res_srl={res_srl})")
+
+    counts: dict[str, int | None] = {}
+    for label, field in HEADCOUNT_FIELDS:
+        el = soup.find("input", attrs={"name": field})
+        digits = re.sub(r"[^0-9]", "", el.get("value") or "") if el is not None else ""
+        counts[label] = int(digits) if digits else (0 if el is not None else None)
+    return counts
+
+
+def format_headcount(counts: dict[str, int | None]) -> str:
+    """{'성인': 2, '아동': 2, '유아': 0} -> '총 4명 (성인 2, 아동 2, 유아 0)'.
+
+    유아는 요금을 받지 않기 때문에 세 구분이 각각 몇 명인지가 요금 확인에 필요하다.
+    그래서 0명인 구분도 생략하지 않고 성인/아동/유아를 항상 다 적는다.
+
+    실제 예약에 0명은 있을 수 없으므로 총합이 0이거나 값을 하나도 못 읽었으면
+    빈 문자열(=확인 실패)을 반환해서 잘못 읽은 값이 정상처럼 보이지 않게 한다.
+    """
+    if not counts or all(v is None for v in counts.values()):
+        return ""
+    total = sum(v for v in counts.values() if v)
+    if total <= 0:
+        return ""
+    parts = [f"{label} {counts[label] or 0}" for label, _ in HEADCOUNT_FIELDS]
+    return f"총 {total}명 ({', '.join(parts)})"
+
+
+def enrich_with_headcount(session: requests.Session, reservation: dict) -> None:
+    """예약 dict에 'headcount' 문자열을 채운다. 실패해도 예외를 밖으로 던지지 않는다.
+
+    인원을 못 가져온 것 때문에 알림/캘린더 등록 자체를 놓치는 게 더 큰 손해라서,
+    실패 시엔 빈 값으로 두고 나머지 정보로 계속 진행한다.
+    """
+    if not reservation.get("res_srl"):
+        reservation["headcount"] = ""
+        return
+    try:
+        counts = fetch_headcount(session, reservation["res_srl"], expected_id=reservation["id"])
+        reservation["headcount"] = format_headcount(counts)
+    except Exception as exc:  # noqa: BLE001
+        # 개인정보가 로그에 남지 않도록 예약번호만 출력한다.
+        print(f"인원 정보 조회 실패, 나머지 정보로 계속 진행: 예약번호={reservation['id']} ({exc})", file=sys.stderr)
+        reservation["headcount"] = ""
+
+
 def send_push(reservation: dict) -> None:
+    # 요금은 알림창에서 굳이 확인할 필요가 없어 캘린더 일정 설명에만 넣는다.
+    # 빈 항목은 걸러서 ' · ' 구분자가 겹쳐 보이지 않게 한다.
+    body_parts = [
+        f"{reservation['name']}님",
+        reservation["room"],
+        reservation["date"],
+        reservation.get("headcount", ""),
+        reservation.get("phone", ""),
+    ]
     payload = json.dumps(
         {
             "title": "새 예약 확정",
-            "body": f"{reservation['name']}님 · {reservation['room']} · {reservation['date']} · {reservation['price']}",
+            "body": " · ".join(part for part in body_parts if part),
             "tag": reservation["id"],
         },
         ensure_ascii=False,
@@ -293,6 +404,35 @@ def get_color_id(room: str) -> str:
     return DEFAULT_COLOR_ID
 
 
+def build_event_description(reservation: dict, memo: str = "") -> str:
+    """캘린더 일정 설명을 만든다.
+
+    신규 등록과 기존 일정 갱신(backfill)이 똑같은 문구를 쓰도록 여기 한 곳에만 둔다.
+    memo는 사람이 직접 적어 넣은 특이사항으로, 갱신할 때 그대로 보존해서 넘겨야 한다.
+    """
+    return (
+        f"성함: {reservation['name']}\n"
+        f"연락처: {reservation.get('phone') or UNKNOWN_LABEL}\n"
+        f"인원: {reservation.get('headcount') or UNKNOWN_LABEL}\n"
+        f"사이트 구역 및 번호: {reservation['room']}\n"
+        f"요금: {reservation['price']}\n"
+        f"특이사항: {memo}"
+    )
+
+
+def parse_event_description(description: str) -> dict[str, str]:
+    """일정 설명을 '라벨 -> 값' dict로 되돌린다 (특이사항 보존용).
+
+    특이사항 값 안에 ':'가 들어있어도 첫 콜론만 기준으로 잘라 값을 온전히 남긴다.
+    """
+    fields = {}
+    for line in (description or "").split("\n"):
+        label, sep, value = line.partition(":")
+        if sep:
+            fields[label.strip()] = value.strip()
+    return fields
+
+
 def create_calendar_event(reservation: dict) -> None:
     try:
         start_date, end_date = parse_date_range(reservation["date"])
@@ -303,11 +443,7 @@ def create_calendar_event(reservation: dict) -> None:
     service = get_calendar_service()
     event = {
         "summary": f"{reservation['name']} · {reservation['room']}",
-        "description": (
-            f"성함: {reservation['name']}\n"
-            f"사이트 구역 및 번호: {reservation['room']}\n"
-            f"특이사항: "
-        ),
+        "description": build_event_description(reservation),
         "start": {"date": start_date.isoformat()},
         # 구글 캘린더 종일 일정의 end.date는 배타적(그 날은 포함 안 됨)이라
         # 체크아웃 당일까지 색이 칠해지도록 하루를 더해서 넣는다.
@@ -338,6 +474,15 @@ def main() -> None:
     print(f"확인된 예약완료 건수: {len(confirmed)}, 신규: {len(new_ones)}")
     for r in new_ones:
         print(f"  -> 신규 확정: 예약번호={r['id']}")
+        # 인원은 상세 페이지에만 있어서 신규 건마다 한 번씩 더 조회한다.
+        # DRY_RUN에서도 조회해 형식을 확인할 수 있게 발송 여부와 무관하게 먼저 채운다.
+        enrich_with_headcount(session, r)
+        if DEBUG:
+            print(
+                f"[DEBUG] 예약번호={r['id']} has_phone={bool(r.get('phone'))} "
+                f"has_headcount={bool(r.get('headcount'))} has_res_srl={bool(r.get('res_srl'))}",
+                file=sys.stderr,
+            )
         if not DRY_RUN:
             try:
                 send_push(r)
