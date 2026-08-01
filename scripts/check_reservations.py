@@ -404,6 +404,16 @@ def get_color_id(room: str) -> str:
     return DEFAULT_COLOR_ID
 
 
+def build_event_summary(reservation: dict) -> str:
+    """캘린더 일정 제목을 만든다.
+
+    사이트(=색상)를 맨 앞에 두어야 구글 캘린더 목록의 제목 가나다순 정렬에서
+    같은 사이트(같은 색)끼리 한 덩어리로 붙는다. 이름은 뒤에 붙인다.
+    신규 등록과 기존 일정 제목 정렬(reorder)이 같은 형식을 쓰도록 여기 한 곳에만 둔다.
+    """
+    return f"{reservation['room']} · {reservation['name']}"
+
+
 def build_event_description(reservation: dict, memo: str = "") -> str:
     """캘린더 일정 설명을 만든다.
 
@@ -442,7 +452,7 @@ def create_calendar_event(reservation: dict) -> None:
 
     service = get_calendar_service()
     event = {
-        "summary": f"{reservation['name']} · {reservation['room']}",
+        "summary": build_event_summary(reservation),
         "description": build_event_description(reservation),
         "start": {"date": start_date.isoformat()},
         # 구글 캘린더 종일 일정의 end.date는 배타적(그 날은 포함 안 됨)이라
