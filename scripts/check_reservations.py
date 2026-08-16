@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """30분마다 실행되어 예약현황 페이지에서 새로 '예약완료'된 건을 찾아
-웹푸시로 알리고 구글 캘린더에 일정을 등록한다.
+웹푸시로 알리고 구글 캘린더에 일정을 등록한다. 반대로 이미 알렸던 예약이 목록에서
+사라지면(취소) 웹푸시로 알리고 등록해뒀던 캘린더 일정을 지운다. 단, 이 기능이
+추가되기 전부터 있던 예약(체크인 날짜/캘린더 일정 id를 모름)은 취소 감지 대상에서
+제외되며, 이 기능 배포 이후 새로 확정되는 예약부터 적용된다.
 
 이름/객실/예약일/요금/전화번호는 목록 페이지에서 한 번에 얻지만, 인원(성인/아동/유아)은
 목록에 없어서 신규 확정 건에 대해서만 예약 상세 페이지를 한 번 더 열어 가져온다.
@@ -30,6 +33,7 @@ import requests
 from bs4 import BeautifulSoup
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from pywebpush import WebPushException, webpush
 
 BASE_URL = "http://pscamp.hana-pnc.co.kr"
@@ -233,21 +237,26 @@ def fetch_reservation_rows(session: requests.Session) -> list[dict]:
     return all_rows
 
 
-def fetch_confirmed_reservations(session: requests.Session) -> list[dict]:
-    return [r for r in fetch_reservation_rows(session) if is_confirmed(r["status"])]
+def load_notified_ids() -> dict[str, dict]:
+    """id -> {'event_id': 캘린더 일정 id 또는 None, 'checkin_date': 'YYYY-MM-DD' 또는 None}.
 
-
-def load_notified_ids() -> set[str]:
+    취소 감지 기능 도입 전에는 단순 id 배열이었다. 그 형식으로 저장된 id는
+    event_id/checkin_date를 몰라 아래에서 None으로 채우며, checkin_date가 없으므로
+    find_cancelled_ids()의 취소 후보에서 자연히 제외된다.
+    """
     if not os.path.exists(STATE_FILE):
-        return set()
+        return {}
     with open(STATE_FILE, encoding="utf-8") as f:
-        return set(json.load(f))
+        data = json.load(f)
+    if isinstance(data, list):
+        return {rid: {"event_id": None, "checkin_date": None} for rid in data}
+    return data
 
 
-def save_notified_ids(ids: set[str]) -> None:
+def save_notified_ids(notified: dict[str, dict]) -> None:
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
+        json.dump(dict(sorted(notified.items())), f, ensure_ascii=False, indent=2)
 
 
 def load_subscriptions() -> list[dict]:
@@ -318,6 +327,20 @@ def enrich_with_headcount(session: requests.Session, reservation: dict) -> None:
         reservation["headcount"] = ""
 
 
+def _dispatch_push(payload: str) -> None:
+    for subscription in load_subscriptions():
+        try:
+            webpush(
+                subscription_info=subscription,
+                data=payload,
+                vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
+                vapid_claims={"sub": os.environ["VAPID_SUBJECT"]},
+            )
+        except WebPushException as exc:
+            # 기기 하나가 만료/구독취소 됐어도 다른 기기에는 계속 보내야 하므로 여기서 중단하지 않음
+            print(f"웹푸시 발송 실패 (기기 1개, 계속 진행): {exc}", file=sys.stderr)
+
+
 def send_push(reservation: dict) -> None:
     # 요금은 알림창에서 굳이 확인할 필요가 없어 캘린더 일정 설명에만 넣는다.
     # 빈 항목은 걸러서 ' · ' 구분자가 겹쳐 보이지 않게 한다.
@@ -336,17 +359,26 @@ def send_push(reservation: dict) -> None:
         },
         ensure_ascii=False,
     )
-    for subscription in load_subscriptions():
-        try:
-            webpush(
-                subscription_info=subscription,
-                data=payload,
-                vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
-                vapid_claims={"sub": os.environ["VAPID_SUBJECT"]},
-            )
-        except WebPushException as exc:
-            # 기기 하나가 만료/구독취소 됐어도 다른 기기에는 계속 보내야 하므로 여기서 중단하지 않음
-            print(f"웹푸시 발송 실패 (기기 1개, 계속 진행): {exc}", file=sys.stderr)
+    _dispatch_push(payload)
+
+
+def send_cancel_push(reservation_id: str, fields: dict[str, str], checkin_date: str) -> None:
+    """취소 알림을 보낸다. fields는 삭제 전 캘린더 일정 설명에서 읽어온 성함/사이트/연락처
+    (event_id를 몰라 캘린더 일정을 못 찾은 경우엔 빈 dict가 들어와 예약번호만 표시된다).
+    """
+    name = fields.get("성함", "")
+    body_parts = [
+        f"{name}님" if name else "",
+        fields.get("사이트 구역 및 번호", ""),
+        checkin_date,
+        fields.get("연락처", ""),
+    ]
+    body = " · ".join(part for part in body_parts if part) or f"예약번호 {reservation_id}"
+    payload = json.dumps(
+        {"title": "예약 취소", "body": body, "tag": reservation_id},
+        ensure_ascii=False,
+    )
+    _dispatch_push(payload)
 
 
 def parse_date_range(date_str: str, today: datetime.date | None = None) -> tuple[datetime.date, datetime.date]:
@@ -443,12 +475,20 @@ def parse_event_description(description: str) -> dict[str, str]:
     return fields
 
 
-def create_calendar_event(reservation: dict) -> None:
+def checkin_date_iso(reservation: dict) -> str | None:
+    try:
+        start, _ = parse_date_range(reservation["date"])
+    except Exception:  # noqa: BLE001
+        return None
+    return start.isoformat()
+
+
+def create_calendar_event(reservation: dict) -> str | None:
     try:
         start_date, end_date = parse_date_range(reservation["date"])
     except Exception as exc:  # noqa: BLE001
         print(f"날짜 파싱 실패, 캘린더 등록 건너뜀: 예약번호={reservation['id']} ({exc})", file=sys.stderr)
-        return
+        return None
 
     service = get_calendar_service()
     event = {
@@ -461,25 +501,65 @@ def create_calendar_event(reservation: dict) -> None:
         # 사이트 종류별로 캘린더에서 한눈에 구분되도록 색상 지정
         "colorId": get_color_id(reservation["room"]),
     }
-    service.events().insert(calendarId=os.environ["GOOGLE_CALENDAR_ID"], body=event).execute()
+    created = service.events().insert(calendarId=os.environ["GOOGLE_CALENDAR_ID"], body=event).execute()
+    return created["id"]
+
+
+def find_cancelled_ids(notified: dict[str, dict], active_ids: set[str]) -> list[str]:
+    """notified 중 체크인일이 아직 지나지 않았는데 목록에서 사라진 id를 취소 후보로 본다.
+
+    체크인일이 이미 지난 id까지 검사하면 MAX_PAGES 페이지네이션 한계로 목록 뒤로
+    밀려난 오래된 완료 건을 취소로 오판할 수 있어, 미래(오늘 포함) 체크인 건으로만 좁힌다.
+    """
+    today_iso = datetime.date.today().isoformat()
+    return [
+        rid
+        for rid, meta in notified.items()
+        if meta.get("checkin_date") and meta["checkin_date"] >= today_iso and rid not in active_ids
+    ]
+
+
+def handle_cancellation(reservation_id: str, meta: dict) -> None:
+    event_id = meta.get("event_id")
+    fields: dict[str, str] = {}
+    if event_id:
+        service = get_calendar_service()
+        calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+        try:
+            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        except HttpError as exc:
+            if exc.resp.status not in (404, 410):
+                raise
+            event = None  # 이미 삭제된 일정. 취소 알림만 보내고 넘어간다.
+        if event is not None:
+            fields = parse_event_description(event.get("description", ""))
+            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+    send_cancel_push(reservation_id, fields, meta.get("checkin_date") or "")
 
 
 def main() -> None:
     session = requests.Session()
     login(session)
 
-    confirmed = fetch_confirmed_reservations(session)
+    raw_rows = fetch_reservation_rows(session)
+    confirmed = [r for r in raw_rows if is_confirmed(r["status"])]
+    # 취소된 예약은 애초에 목록 응답에서 빠지지만, 입실완료(체크인 완료)로 넘어간 예약은
+    # 그대로 남아있다. 그래서 취소 판정 기준은 confirmed가 아니라 raw_rows 전체여야
+    # "예약완료 -> 입실완료" 전환을 취소로 오판하지 않는다.
+    active_ids = {r["id"] for r in raw_rows}
     notified = load_notified_ids()
 
     if SEED_ONLY:
         # 최초 1회: 지금까지 쌓인 예약완료 건을 전부 '이미 알림' 상태로만 기록하고 푸시는 보내지 않는다.
         before = len(notified)
-        notified.update(r["id"] for r in confirmed)
+        for r in confirmed:
+            notified.setdefault(r["id"], {"event_id": None, "checkin_date": checkin_date_iso(r)})
         print(f"시드 완료: {len(notified) - before}건을 신규 알림 없이 기록함 (총 {len(notified)}건)")
         save_notified_ids(notified)
         return
 
     new_ones = [r for r in confirmed if r["id"] not in notified]
+    changed = False
 
     print(f"확인된 예약완료 건수: {len(confirmed)}, 신규: {len(new_ones)}")
     for r in new_ones:
@@ -493,18 +573,34 @@ def main() -> None:
                 f"has_headcount={bool(r.get('headcount'))} has_res_srl={bool(r.get('res_srl'))}",
                 file=sys.stderr,
             )
+        event_id = None
         if not DRY_RUN:
             try:
                 send_push(r)
-                create_calendar_event(r)
+                event_id = create_calendar_event(r)
             except Exception as exc:  # noqa: BLE001
                 # 한 건에서 실패해도 나머지 신규 확정 건은 계속 처리해야 한다.
                 # 이 건은 notified에 추가하지 않아 다음 실행에서 다시 시도된다.
                 print(f"알림/캘린더 처리 실패, 다음 실행에서 재시도: 예약번호={r['id']} ({exc})", file=sys.stderr)
                 continue
-        notified.add(r["id"])
+        notified[r["id"]] = {"event_id": event_id, "checkin_date": checkin_date_iso(r)}
+        changed = True
 
-    if not DRY_RUN and new_ones:
+    cancelled_ids = find_cancelled_ids(notified, active_ids)
+    print(f"취소 감지: {len(cancelled_ids)}건")
+    for rid in cancelled_ids:
+        print(f"  -> 취소 감지: 예약번호={rid}")
+        if not DRY_RUN:
+            try:
+                handle_cancellation(rid, notified[rid])
+            except Exception as exc:  # noqa: BLE001
+                # 이 건은 notified에서 지우지 않아 다음 실행에서 다시 시도된다.
+                print(f"취소 처리 실패, 다음 실행에서 재시도: 예약번호={rid} ({exc})", file=sys.stderr)
+                continue
+        del notified[rid]
+        changed = True
+
+    if not DRY_RUN and changed:
         save_notified_ids(notified)
 
 
