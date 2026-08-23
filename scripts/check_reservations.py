@@ -51,7 +51,20 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 SEED_ONLY = os.environ.get("SEED_ONLY") == "1"
 DEBUG = os.environ.get("DEBUG") == "1"
 CONFIRMED_KEYWORDS = ["예약완료", "결제완료"]
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "30"))
+# 예약 채널이 전화/쇼핑몰(OTA)/현장결제/방막기인 행은 "예약번호" 칸에 고유 번호 대신
+# 채널명이 그대로 찍혀 나온다. 이 값들을 id로 그대로 쓰면 서로 다른 예약이 같은 키로
+# 겹쳐버리므로, 이런 행은 내부 관리번호(res_srl)를 붙여 고유하게 만든다.
+NON_UNIQUE_ID_LABELS = {"전화", "쇼핑몰", "방막기", "현장결제"}
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "200"))
+# 한 번 실행에서 이 값을 넘는 취소가 감지되면 뭔가 잘못된 것(목록 조회 실패, 로그인 실패,
+# 사이트 구조 변경 등)으로 보고 취소 처리를 건너뛴다. 사이트 통상적인 취소 빈도보다
+# 훨씬 크게 잡아 정상적인 취소는 절대 막지 않으면서도, 대량 오탐이 실제로 푸시/캘린더
+# 삭제까지 실행되는 사고(2026-08-23 실제 발생)를 막는 안전장치다.
+MAX_CANCELLATIONS_PER_RUN = int(os.environ.get("MAX_CANCELLATIONS_PER_RUN", "15"))
+# 같은 이유로 신규 확정도 한 번에 너무 많이 잡히면(예: MAX_PAGES를 늘렸더니 그동안
+# 추적 안 된 오래된 예약이 무더기로 "신규"로 잡히는 경우) 실제 발송 대신 건너뛴다.
+# 이런 배치는 SEED_ONLY로 조용히 기록해야 한다.
+MAX_NEW_PER_RUN = int(os.environ.get("MAX_NEW_PER_RUN", "15"))
 # 구글 캘린더 고정 팔레트(1~11) 중 서로 잘 구분되는 색상을 사이트 종류별로 배정
 SITE_TYPE_COLORS = {
     "민박": "5",     # Banana (노랑)
@@ -171,6 +184,9 @@ def parse_reservations(html: str) -> list[dict]:
         reservation_id = normalize(cells[idx_id].get_text())
         if not reservation_id:
             continue
+        res_srl = parse_res_srl(tr)
+        if reservation_id in NON_UNIQUE_ID_LABELS and res_srl:
+            reservation_id = f"{reservation_id}-{res_srl}"
         status = normalize(cells[idx_status].get_text()) if idx_status is not None and idx_status < len(cells) else ""
 
         name = ""
@@ -193,7 +209,7 @@ def parse_reservations(html: str) -> list[dict]:
                 "price": normalize(cells[idx_price].get_text()) if idx_price is not None and idx_price < len(cells) else "",
                 "name": name,
                 "phone": phone,
-                "res_srl": parse_res_srl(tr),
+                "res_srl": res_srl,
                 "status": status,
             }
         )
@@ -203,6 +219,85 @@ def parse_reservations(html: str) -> list[dict]:
 def is_confirmed(status: str) -> bool:
     compact = status.replace(" ", "")
     return any(keyword in compact for keyword in CONFIRMED_KEYWORDS)
+
+
+# 예약-대시보드 화면의 사이트별 일자 칸이 실제로 호출하는 조회 방식과 동일하다
+# (대시보드 HTML의 data-url1에서 확인). "상태" 글자만 보는 기존 방식과 달리 이 방식은
+# 사이트 자체가 유효하다고 판단한 예약만 돌려준다 — 2026-08-23에 실제로 발견된 사례로,
+# 같은 사람 이름이 겹치는 날짜에 여러 사이트로 잡혀있던 유령/중복 예약(상태 텍스트는
+# "예약완료"로 정상처럼 보였음)이 날짜범위+islog=Y 조회에서는 아예 나오지 않았다.
+CATEGORY_IDS = {
+    "서숲A사이트": "8",
+    "서숲B사이트": "9",
+    "서숲카라반": "10",
+    "서숲장박": "11",
+    "서숲민박": "12",
+    "평상": "13",
+    "야외테이블": "14",
+}
+# 오늘부터 이 개월 수 뒤까지만 조회한다. 과거 체크인 건은 취소 감지 대상도 아니고(위
+# find_cancelled_ids 참고) 신규로 잡을 필요도 없어 애초에 범위에 넣지 않는다.
+# 기본값 2(이번 달 + 다음 달)는 사용자 지시(2026-08-23): 겨울 장박은 아직 접수 시작 전이라
+# 너무 먼 미래까지 캘린더에 넣을 필요 없고, 매 실행이 "오늘" 기준으로 범위를 다시 계산하니
+# 달이 바뀌면 자동으로 다음 달이 굴러 들어온다(별도 수동 조정 불필요).
+ACTIVE_LOOKAHEAD_MONTHS = int(os.environ.get("ACTIVE_LOOKAHEAD_MONTHS", "2"))
+
+
+def _month_ranges(start: datetime.date, months: int) -> list[tuple[str, str]]:
+    """start가 속한 달부터 months개월 분량의 (YYYYMMDD 시작일, YYYYMMDD 종료일) 목록.
+
+    dispYeyakAdminResList는 start_date~end_date 범위가 너무 넓으면(직접 확인: 오늘부터
+    400일) 조용히 일부만 돌려주는 문제가 있어(예: 8월 한 달만 조회하면 54건인데 8월+
+    이후 400일을 한 번에 조회하면 오히려 24건으로 줄어듦), 대시보드가 실제로 쓰는
+    것처럼 한 달 단위로 나눠서 조회해야 안전하다.
+    """
+    ranges = []
+    year, month = start.year, start.month
+    for _ in range(months):
+        month_start = datetime.date(year, month, 1)
+        if month == 12:
+            next_month_start = datetime.date(year + 1, 1, 1)
+        else:
+            next_month_start = datetime.date(year, month + 1, 1)
+        month_end = next_month_start - datetime.timedelta(days=1)
+        # 오늘이 속한 첫 달은 지나간 날짜부터 조회할 필요 없으니 시작일을 오늘로 당긴다.
+        effective_start = max(month_start, start)
+        ranges.append((effective_start.strftime("%Y%m%d"), month_end.strftime("%Y%m%d")))
+        year, month = next_month_start.year, next_month_start.month
+    return ranges
+
+
+def fetch_active_reservation_rows(session: requests.Session, today: datetime.date | None = None) -> list[dict]:
+    """대시보드와 같은 카테고리별/월별 날짜범위(+islog=Y) 조회로 실제 유효한 예약만 모은다.
+
+    fetch_reservation_rows()(상태 필터 없는 전체 페이지 조회, backfill 스크립트 전용)와
+    달리 유령/중복 예약이 섞이지 않는다 — 2026-08-23에 실제로 확인: 같은 사람 이름이
+    겹치는 날짜에 여러 사이트로 잡혀있던 예약(상태 텍스트는 "예약완료"로 정상처럼
+    보였음)이 이 방식에서는 처음부터 나오지 않았다.
+    """
+    today = today or datetime.date.today()
+    month_ranges = _month_ranges(today, ACTIVE_LOOKAHEAD_MONTHS)
+
+    all_rows: list[dict] = []
+    seen_ids: set[str] = set()
+    for cate_srl in CATEGORY_IDS.values():
+        for start_str, end_str in month_ranges:
+            for page in range(1, MAX_PAGES + 1):
+                url = (
+                    f"{BASE_URL}/index.php?module=admin&act=dispYeyakAdminResList"
+                    f"&start_date={start_str}&end_date={end_str}&cate_srl={cate_srl}"
+                    f"&islog=Y&page={page}"
+                )
+                resp = session.get(url, timeout=15)
+                resp.raise_for_status()
+                rows = parse_reservations(resp.text)
+                if not rows:
+                    break
+                for r in rows:
+                    if r["id"] not in seen_ids:
+                        seen_ids.add(r["id"])
+                        all_rows.append(r)
+    return all_rows
 
 
 def fetch_reservation_rows(session: requests.Session) -> list[dict]:
@@ -505,17 +600,30 @@ def create_calendar_event(reservation: dict) -> str | None:
     return created["id"]
 
 
+def active_window_end(today: datetime.date | None = None) -> datetime.date:
+    """fetch_active_reservation_rows()가 실제로 조회하는 마지막 날짜(월 단위 범위의 끝)."""
+    today = today or datetime.date.today()
+    _, last_end = _month_ranges(today, ACTIVE_LOOKAHEAD_MONTHS)[-1]
+    return datetime.datetime.strptime(last_end, "%Y%m%d").date()
+
+
 def find_cancelled_ids(notified: dict[str, dict], active_ids: set[str]) -> list[str]:
-    """notified 중 체크인일이 아직 지나지 않았는데 목록에서 사라진 id를 취소 후보로 본다.
+    """notified 중 체크인일이 조회 범위 안(오늘~active_window_end)인데 목록에서 사라진 id를
+    취소 후보로 본다.
 
     체크인일이 이미 지난 id까지 검사하면 MAX_PAGES 페이지네이션 한계로 목록 뒤로
-    밀려난 오래된 완료 건을 취소로 오판할 수 있어, 미래(오늘 포함) 체크인 건으로만 좁힌다.
+    밀려난 오래된 완료 건을 취소로 오판할 수 있어 과거는 제외한다. 조회 범위 밖(먼 미래)의
+    id도 마찬가지로 제외해야 한다 — active_ids 자체가 ACTIVE_LOOKAHEAD_MONTHS 범위만
+    보므로, 범위 밖 id는 목록에 없는 게 당연하고 취소가 아니다.
     """
     today_iso = datetime.date.today().isoformat()
+    window_end_iso = active_window_end().isoformat()
     return [
         rid
         for rid, meta in notified.items()
-        if meta.get("checkin_date") and meta["checkin_date"] >= today_iso and rid not in active_ids
+        if meta.get("checkin_date")
+        and today_iso <= meta["checkin_date"] <= window_end_iso
+        and rid not in active_ids
     ]
 
 
@@ -541,7 +649,7 @@ def main() -> None:
     session = requests.Session()
     login(session)
 
-    raw_rows = fetch_reservation_rows(session)
+    raw_rows = fetch_active_reservation_rows(session)
     confirmed = [r for r in raw_rows if is_confirmed(r["status"])]
     # 취소된 예약은 애초에 목록 응답에서 빠지지만, 입실완료(체크인 완료)로 넘어간 예약은
     # 그대로 남아있다. 그래서 취소 판정 기준은 confirmed가 아니라 raw_rows 전체여야
@@ -562,6 +670,14 @@ def main() -> None:
     changed = False
 
     print(f"확인된 예약완료 건수: {len(confirmed)}, 신규: {len(new_ones)}")
+    if len(new_ones) > MAX_NEW_PER_RUN:
+        print(
+            f"신규 확정 건수가 비정상적으로 많음({len(new_ones)}건 > {MAX_NEW_PER_RUN}건) - "
+            "MAX_PAGES 변경 등으로 오래된 미추적 예약이 한꺼번에 잡혔을 수 있어 이번 실행에서는 "
+            "건너뜀 (SEED_ONLY=1로 조용히 기록하거나 원인 확인 후 다시 실행 필요)",
+            file=sys.stderr,
+        )
+        new_ones = []
     for r in new_ones:
         print(f"  -> 신규 확정: 예약번호={r['id']}")
         # 인원은 상세 페이지에만 있어서 신규 건마다 한 번씩 더 조회한다.
@@ -588,6 +704,14 @@ def main() -> None:
 
     cancelled_ids = find_cancelled_ids(notified, active_ids)
     print(f"취소 감지: {len(cancelled_ids)}건")
+    if len(cancelled_ids) > MAX_CANCELLATIONS_PER_RUN:
+        print(
+            f"취소 감지 건수가 비정상적으로 많음({len(cancelled_ids)}건 > "
+            f"{MAX_CANCELLATIONS_PER_RUN}건) - 목록 조회가 일부만 됐거나 사이트 문제일 수 있어 "
+            "이번 실행에서는 취소 처리를 전부 건너뜀 (다음 실행에서 다시 시도됨)",
+            file=sys.stderr,
+        )
+        cancelled_ids = []
     for rid in cancelled_ids:
         print(f"  -> 취소 감지: 예약번호={rid}")
         if not DRY_RUN:
