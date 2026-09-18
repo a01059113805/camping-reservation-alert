@@ -3,10 +3,6 @@
     "event_id": null,
     "checkin_date": "2026-11-30"
   },
-  "23XRC3SV": {
-    "event_id": "ql1s25k1eo2ou6k64l32ta6r4k",
-    "checkin_date": "2026-09-18"
-  },
   "25GRCGGM": {
     "event_id": "ltelktbcg7rs57ptumd365b564",
     "checkin_date": "2026-10-31"
@@ -62,6 +58,10 @@
   "2HS2C3Z": {
     "event_id": null,
     "checkin_date": "2026-05-05"
+  },
+  "2JN32R7R": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
   },
   "2KCU9M4F": {
     "event_id": null,
@@ -151,9 +151,17 @@
     "event_id": null,
     "checkin_date": "2026-06-07"
   },
+  "3B5RBGB": {
+    "event_id": null,
+    "checkin_date": "2026-09-16"
+  },
   "3BUD2RKD": {
     "event_id": null,
     "checkin_date": "2026-05-01"
+  },
+  "3CGAZW4A": {
+    "event_id": null,
+    "checkin_date": "2026-09-11"
   },
   "3CP5Y42": {
     "event_id": null,
@@ -451,10 +459,6 @@
     "event_id": null,
     "checkin_date": "2026-11-21"
   },
-  "5A2USRBA": {
-    "event_id": "ejafu9uuaisqcc4nbomm0f8gl8",
-    "checkin_date": "2026-09-26"
-  },
   "5DDJM8RT": {
     "event_id": null,
     "checkin_date": "2026-06-07"
@@ -490,6 +494,10 @@
   "5JUCSGKJ": {
     "event_id": null,
     "checkin_date": "2026-05-31"
+  },
+  "5K5NGPB": {
+    "event_id": null,
+    "checkin_date": "2026-08-30"
   },
   "5KK3EJHC": {
     "event_id": null,
@@ -590,6 +598,10 @@
   "6AJJB2X4": {
     "event_id": null,
     "checkin_date": "2026-04-10"
+  },
+  "6AUBW75S": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
   },
   "6BS2KMF": {
     "event_id": null,
@@ -822,6 +834,10 @@
   "7R5HKEHW": {
     "event_id": null,
     "checkin_date": "2026-12-26"
+  },
+  "7SMJDTMV": {
+    "event_id": null,
+    "checkin_date": "2026-08-23"
   },
   "7T5FVYMK": {
     "event_id": null,
@@ -1103,6 +1119,10 @@
     "event_id": null,
     "checkin_date": "2026-05-23"
   },
+  "9NEG84MT": {
+    "event_id": null,
+    "checkin_date": "2026-08-29"
+  },
   "9PBNGPXN": {
     "event_id": null,
     "checkin_date": "2026-06-26"
@@ -1170,6 +1190,10 @@
   "A5F2C5K": {
     "event_id": null,
     "checkin_date": "2026-11-22"
+  },
+  "A66NRR6": {
+    "event_id": null,
+    "checkin_date": "2026-08-23"
   },
   "A8W675RJ": {
     "event_id": null,
@@ -1343,6 +1367,10 @@
     "event_id": null,
     "checkin_date": "2026-06-06"
   },
+  "B6XEFYW": {
+    "event_id": null,
+    "checkin_date": "2026-09-11"
+  },
   "B79ZBX7V": {
     "event_id": null,
     "checkin_date": "2026-10-07"
@@ -1478,6 +1506,10 @@
   "CBCKR5HX": {
     "event_id": "sg1ql9ndr796dhqudb5eo19jh8",
     "checkin_date": "2026-09-18"
+  },
+  "CBFA67SB": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
   },
   "CBGENJB6": {
     "event_id": null,
@@ -1755,6 +1787,10 @@
     "event_id": "h3ukqe75qtlvdqihaksd2g0urk",
     "checkin_date": "2026-08-01"
   },
+  "EANPHEY": {
+    "event_id": null,
+    "checkin_date": "2026-08-30"
+  },
   "EC98GABF": {
     "event_id": null,
     "checkin_date": "2026-06-06"
@@ -1826,6 +1862,10 @@
   "EX2MHK6": {
     "event_id": null,
     "checkin_date": "2026-10-07"
+  },
+  "EXBVWXP3": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
   },
   "EXFK7PCW": {
     "event_id": null,
@@ -2235,6 +2275,10 @@
     "event_id": null,
     "checkin_date": "2026-11-30"
   },
+  "HSAD4J": {
+    "event_id": null,
+    "checkin_date": "2026-08-30"
+  },
   "HST4ZWDH": {
     "event_id": null,
     "checkin_date": "2026-06-05"
@@ -2382,6 +2426,10 @@
   "JFJ9J7X": {
     "event_id": null,
     "checkin_date": "2026-05-04"
+  },
+  "JHYGEECV": {
+    "event_id": null,
+    "checkin_date": "2026-09-11"
   },
   "JJTZPYKK": {
     "event_id": null,
@@ -2727,6 +2775,10 @@
     "event_id": null,
     "checkin_date": "2026-11-15"
   },
+  "MDH9X9ZD": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
+  },
   "MEN3KK73": {
     "event_id": null,
     "checkin_date": "2027-01-02"
@@ -2815,6 +2867,10 @@
     "event_id": null,
     "checkin_date": "2026-11-27"
   },
+  "N2JPAPK9": {
+    "event_id": null,
+    "checkin_date": "2026-08-23"
+  },
   "N2YF4M4": {
     "event_id": null,
     "checkin_date": "2026-05-03"
@@ -2886,6 +2942,10 @@
   "NKG5FHDF": {
     "event_id": null,
     "checkin_date": "2026-06-07"
+  },
+  "NKRGYNS5": {
+    "event_id": null,
+    "checkin_date": "2026-08-23"
   },
   "NMBBZ2AU": {
     "event_id": null,
@@ -3239,6 +3299,10 @@
     "event_id": "2mc29i7n946epprcae7n2ebqf0",
     "checkin_date": "2026-10-30"
   },
+  "S482XBAK": {
+    "event_id": null,
+    "checkin_date": "2026-09-16"
+  },
   "S57B2K7B": {
     "event_id": null,
     "checkin_date": "2026-11-27"
@@ -3559,6 +3623,10 @@
     "event_id": "2rn8u3dlnnp0ng6onul3q9rir8",
     "checkin_date": "2026-08-01"
   },
+  "UDZAD5TS": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
+  },
   "UENMBUR": {
     "event_id": null,
     "checkin_date": "2026-05-04"
@@ -3606,6 +3674,10 @@
   "UTA4V4K": {
     "event_id": null,
     "checkin_date": "2026-12-13"
+  },
+  "UTCT9YHG": {
+    "event_id": null,
+    "checkin_date": "2026-09-12"
   },
   "UUYBS5PB": {
     "event_id": null,
@@ -3919,6 +3991,10 @@
     "event_id": null,
     "checkin_date": "2026-12-25"
   },
+  "WNVRD4NP": {
+    "event_id": null,
+    "checkin_date": "2026-08-29"
+  },
   "WSB6AMMM": {
     "event_id": null,
     "checkin_date": "2026-12-13"
@@ -3987,6 +4063,10 @@
     "event_id": null,
     "checkin_date": "2026-12-24"
   },
+  "X63WUW7X": {
+    "event_id": null,
+    "checkin_date": "2026-08-30"
+  },
   "X9ZVWJMU": {
     "event_id": null,
     "checkin_date": "2026-11-23"
@@ -4050,6 +4130,10 @@
   "XY6SHDPZ": {
     "event_id": null,
     "checkin_date": "2026-10-07"
+  },
+  "XZT787UR": {
+    "event_id": null,
+    "checkin_date": "2026-08-30"
   },
   "Y2Y2M2XV": {
     "event_id": null,
@@ -4170,6 +4254,10 @@
   "YKZPVKK": {
     "event_id": null,
     "checkin_date": "2026-11-22"
+  },
+  "YMUW99D7": {
+    "event_id": null,
+    "checkin_date": "2026-08-29"
   },
   "YRZ3B5P2": {
     "event_id": null,
@@ -5574,6 +5662,18 @@
   "전화-4367": {
     "event_id": null,
     "checkin_date": "2026-07-11"
+  },
+  "전화-4410": {
+    "event_id": null,
+    "checkin_date": "2026-08-02"
+  },
+  "전화-4795": {
+    "event_id": null,
+    "checkin_date": "2026-09-17"
+  },
+  "전화-4796": {
+    "event_id": null,
+    "checkin_date": "2026-09-17"
   },
   "현장결제-1898": {
     "event_id": "0cggpufr9bidh0g57e42afd5u8",
