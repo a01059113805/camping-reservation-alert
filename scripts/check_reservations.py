@@ -11,7 +11,8 @@
 필요 환경변수:
   ADMIN_ID, ADMIN_PW          예약 관리자 로그인 계정
   LOGIN_URL                   로그인 POST 대상 URL (기본값: 홈페이지 XE 로그인)
-  LIST_URL                    예약현황 목록 조회 URL (상태=예약완료 필터가 걸린 상태의 URL을 그대로 넣어야 함)
+  LIST_URL                    관리자 페이지 "예약현황" 메뉴가 여는 목록 조회 URL (필터 없는
+                               상태 그대로 넣어야 함 — 상태 판별은 코드에서 직접 함)
   VAPID_PRIVATE_KEY           웹푸시 VAPID 개인키
   VAPID_SUBJECT               mailto:본인이메일 형식
   PUSH_SUBSCRIPTIONS          구독 페이지에서 복사한 JSON을 기기별로 모은 배열 문자열
@@ -40,11 +41,12 @@ BASE_URL = "http://pscamp.hana-pnc.co.kr"
 # GitHub Actions는 등록 안 된 시크릿도 빈 문자열 env로 넘기므로, os.environ.get의
 # 기본값 인자가 아니라 `or`로 빈 문자열도 기본값으로 대체되게 처리한다.
 LOGIN_URL = os.environ.get("LOGIN_URL") or f"{BASE_URL}/index.php?act=procMemberLogin"
-# 관리자 페이지에서 상태 필터를 "예약완료"(status=1)로 걸고 확인한 실제 목록 URL
+# 관리자 좌측 메뉴의 "예약현황"이 실제로 여는 페이지(필터 없음) 그대로다 — 사용자가 매일
+# 보는 화면과 완전히 같은 데이터를 기준으로 삼기 위해 2026-09-18에 상태 필터를 뺐다.
+# 필터 없이 전체(예약완료/입실완료/각종 취소)를 다 가져오는 대신, 상태 판별은
+# is_confirmed()/is_cancelled_status()로 코드에서 직접 한다.
 LIST_URL = os.environ.get("LIST_URL") or (
-    f"{BASE_URL}/index.php?mid=&vid=&module=admin&act=dispYeyakAdminResList"
-    "&islog=&order_type=desc&sort_index=res_srl&list_count=20&hide_room_block="
-    "&cate_srl=&status=1&start_date=&end_date=&searchType=&searchStr="
+    f"{BASE_URL}/index.php?module=admin&act=dispYeyakAdminResList"
 )
 STATE_FILE = os.environ.get("STATE_FILE", "data/notified_ids.json")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
@@ -221,83 +223,32 @@ def is_confirmed(status: str) -> bool:
     return any(keyword in compact for keyword in CONFIRMED_KEYWORDS)
 
 
-# 예약-대시보드 화면의 사이트별 일자 칸이 실제로 호출하는 조회 방식과 동일하다
-# (대시보드 HTML의 data-url1에서 확인). "상태" 글자만 보는 기존 방식과 달리 이 방식은
-# 사이트 자체가 유효하다고 판단한 예약만 돌려준다 — 2026-08-23에 실제로 발견된 사례로,
-# 같은 사람 이름이 겹치는 날짜에 여러 사이트로 잡혀있던 유령/중복 예약(상태 텍스트는
-# "예약완료"로 정상처럼 보였음)이 날짜범위+islog=Y 조회에서는 아예 나오지 않았다.
-CATEGORY_IDS = {
-    "서숲A사이트": "8",
-    "서숲B사이트": "9",
-    "서숲카라반": "10",
-    "서숲장박": "11",
-    "서숲민박": "12",
-    "평상": "13",
-    "야외테이블": "14",
-}
-# 오늘부터 이 개월 수 뒤까지만 조회한다. 과거 체크인 건은 취소 감지 대상도 아니고(위
-# find_cancelled_ids 참고) 신규로 잡을 필요도 없어 애초에 범위에 넣지 않는다.
-# 기본값 2(이번 달 + 다음 달)는 사용자 지시(2026-08-23): 겨울 장박은 아직 접수 시작 전이라
-# 너무 먼 미래까지 캘린더에 넣을 필요 없고, 매 실행이 "오늘" 기준으로 범위를 다시 계산하니
-# 달이 바뀌면 자동으로 다음 달이 굴러 들어온다(별도 수동 조정 불필요).
-ACTIVE_LOOKAHEAD_MONTHS = int(os.environ.get("ACTIVE_LOOKAHEAD_MONTHS", "2"))
+def is_cancelled_status(status: str) -> bool:
+    """LIST_URL이 이제 상태 필터 없이 전체(예약완료/입실완료/환불 취소/운영 취소/자동 취소/
+    취소 완료)를 돌려주므로, 취소 감지의 "아직 살아있음" 판정은 상태 텍스트에 '취소'가
+    있는지로 직접 가른다 (목록에서 사라지는 게 아니라 상태만 바뀌므로 존재 여부만으로는
+    취소를 구분할 수 없다)."""
+    return "취소" in status.replace(" ", "")
 
 
-def _month_ranges(start: datetime.date, months: int) -> list[tuple[str, str]]:
-    """start가 속한 달부터 months개월 분량의 (YYYYMMDD 시작일, YYYYMMDD 종료일) 목록.
+def is_room_block(reservation_id: str) -> bool:
+    """"방막기"(관리자가 손님 예약을 막으려고 사이트를 잠가둔 행, 실제 손님이 아님) 여부.
 
-    dispYeyakAdminResList는 start_date~end_date 범위가 너무 넓으면(직접 확인: 오늘부터
-    400일) 조용히 일부만 돌려주는 문제가 있어(예: 8월 한 달만 조회하면 54건인데 8월+
-    이후 400일을 한 번에 조회하면 오히려 24건으로 줄어듦), 대시보드가 실제로 쓰는
-    것처럼 한 달 단위로 나눠서 조회해야 안전하다.
+    NON_UNIQUE_ID_LABELS 처리로 "방막기-<res_srl>" 형태가 되어 있다. 나머지 라벨(전화/
+    쇼핑몰/현장결제)은 접수 채널이 다를 뿐 실제 손님 예약이라 그대로 둔다.
     """
-    ranges = []
-    year, month = start.year, start.month
-    for _ in range(months):
-        month_start = datetime.date(year, month, 1)
-        if month == 12:
-            next_month_start = datetime.date(year + 1, 1, 1)
-        else:
-            next_month_start = datetime.date(year, month + 1, 1)
-        month_end = next_month_start - datetime.timedelta(days=1)
-        # 오늘이 속한 첫 달은 지나간 날짜부터 조회할 필요 없으니 시작일을 오늘로 당긴다.
-        effective_start = max(month_start, start)
-        ranges.append((effective_start.strftime("%Y%m%d"), month_end.strftime("%Y%m%d")))
-        year, month = next_month_start.year, next_month_start.month
-    return ranges
+    return reservation_id == "방막기" or reservation_id.startswith("방막기-")
 
 
-def fetch_active_reservation_rows(session: requests.Session, today: datetime.date | None = None) -> list[dict]:
-    """대시보드와 같은 카테고리별/월별 날짜범위(+islog=Y) 조회로 실제 유효한 예약만 모은다.
-
-    fetch_reservation_rows()(상태 필터 없는 전체 페이지 조회, backfill 스크립트 전용)와
-    달리 유령/중복 예약이 섞이지 않는다 — 2026-08-23에 실제로 확인: 같은 사람 이름이
-    겹치는 날짜에 여러 사이트로 잡혀있던 예약(상태 텍스트는 "예약완료"로 정상처럼
-    보였음)이 이 방식에서는 처음부터 나오지 않았다.
-    """
-    today = today or datetime.date.today()
-    month_ranges = _month_ranges(today, ACTIVE_LOOKAHEAD_MONTHS)
-
-    all_rows: list[dict] = []
-    seen_ids: set[str] = set()
-    for cate_srl in CATEGORY_IDS.values():
-        for start_str, end_str in month_ranges:
-            for page in range(1, MAX_PAGES + 1):
-                url = (
-                    f"{BASE_URL}/index.php?module=admin&act=dispYeyakAdminResList"
-                    f"&start_date={start_str}&end_date={end_str}&cate_srl={cate_srl}"
-                    f"&islog=Y&page={page}"
-                )
-                resp = session.get(url, timeout=15)
-                resp.raise_for_status()
-                rows = parse_reservations(resp.text)
-                if not rows:
-                    break
-                for r in rows:
-                    if r["id"] not in seen_ids:
-                        seen_ids.add(r["id"])
-                        all_rows.append(r)
-    return all_rows
+# 2026-08-23에는 이 방식(카테고리+월별 날짜범위+islog=Y)이 상태 텍스트만 보는 것보다
+# 안전하다고 보고 도입했었지만, 2026-09-18에 실제로 검증해보니 반대의 문제가 드러났다:
+# 방금 확정됐거나 심지어 몇 주 전부터 추적 중이던 정상 예약도 이 조회에서 종종 빠졌다
+# (islog=Y가 사이트 내부 로그 처리 지연/배치와 연결된 것으로 보임 — 최신 예약을 놓치는
+# 방향의 오탐이라 "손님을 절대 놓치면 안 된다"는 요구와 정면으로 배치된다). 그래서 이
+# 방식은 폐기하고, 아래 fetch_reservation_rows()(상태=예약완료 필터가 걸린 전체 페이지,
+# MAX_PAGES로 안전하게 끝까지 조회)를 신규/취소 감지 양쪽의 유일한 기준으로 쓴다.
+# 8/23 사고의 진짜 원인은 이 목록 자체가 아니라 그때 MAX_PAGES가 30(약 600건)으로 너무
+# 낮아서 뒤쪽 페이지가 잘렸던 것이었고, 지금 기본값 200(4000건)이면 충분히 여유롭다.
 
 
 def fetch_reservation_rows(session: requests.Session) -> list[dict]:
@@ -578,6 +529,14 @@ def checkin_date_iso(reservation: dict) -> str | None:
     return start.isoformat()
 
 
+def checkout_date_iso(reservation: dict) -> str | None:
+    try:
+        _, end = parse_date_range(reservation["date"])
+    except Exception:  # noqa: BLE001
+        return None
+    return end.isoformat()
+
+
 def create_calendar_event(reservation: dict) -> str | None:
     try:
         start_date, end_date = parse_date_range(reservation["date"])
@@ -600,31 +559,44 @@ def create_calendar_event(reservation: dict) -> str | None:
     return created["id"]
 
 
-def active_window_end(today: datetime.date | None = None) -> datetime.date:
-    """fetch_active_reservation_rows()가 실제로 조회하는 마지막 날짜(월 단위 범위의 끝)."""
-    today = today or datetime.date.today()
-    _, last_end = _month_ranges(today, ACTIVE_LOOKAHEAD_MONTHS)[-1]
-    return datetime.datetime.strptime(last_end, "%Y%m%d").date()
-
-
 def find_cancelled_ids(notified: dict[str, dict], active_ids: set[str]) -> list[str]:
-    """notified 중 체크인일이 조회 범위 안(오늘~active_window_end)인데 목록에서 사라진 id를
-    취소 후보로 본다.
+    """notified 중 체크인일이 오늘 이후인데 목록(active_ids)에서 사라진 id를 취소 후보로 본다.
 
-    체크인일이 이미 지난 id까지 검사하면 MAX_PAGES 페이지네이션 한계로 목록 뒤로
-    밀려난 오래된 완료 건을 취소로 오판할 수 있어 과거는 제외한다. 조회 범위 밖(먼 미래)의
-    id도 마찬가지로 제외해야 한다 — active_ids 자체가 ACTIVE_LOOKAHEAD_MONTHS 범위만
-    보므로, 범위 밖 id는 목록에 없는 게 당연하고 취소가 아니다.
+    체크인일이 이미 지난 id까지 검사하면 이미 입실완료로 넘어갔거나 MAX_PAGES 한계로
+    목록 뒤로 밀려난 오래된 완료 건을 취소로 오판할 수 있어 과거는 제외한다. active_ids가
+    fetch_reservation_rows()(날짜 제한 없는 전체 페이지) 기준이라 먼 미래(겨울 장박 등)
+    취소도 범위 제한 없이 바로 잡힌다.
     """
     today_iso = datetime.date.today().isoformat()
-    window_end_iso = active_window_end().isoformat()
     return [
         rid
         for rid, meta in notified.items()
         if meta.get("checkin_date")
-        and today_iso <= meta["checkin_date"] <= window_end_iso
+        and meta["checkin_date"] >= today_iso
         and rid not in active_ids
     ]
+
+
+def split_past_checkin(
+    candidates: list[dict], today: datetime.date | None = None
+) -> tuple[list[dict], list[dict]]:
+    """신규 후보를 (숙박이 완전히 끝난 것, 아직 안 끝났거나 날짜를 모르는 것)으로 나눈다.
+
+    기준은 체크인일이 아니라 체크아웃일이다 — 어제 체크인해서 오늘까지 머무는 1박
+    손님처럼 체크인일은 지났어도 체크아웃일이 오늘 이후면 아직 캘린더에 남아있는 게
+    맞다 (2026-09-18에 실제로 이 차이 때문에 당일 체크아웃 손님 2건이 캘린더에서 누락된
+    사고 발견). 체크아웃일까지 완전히 지난 예약만 지금 캘린더/알림에 올려도 의미가
+    없다고 보고 조용히 기록만 한다.
+    """
+    today_iso = (today or datetime.date.today()).isoformat()
+    past, upcoming = [], []
+    for r in candidates:
+        checkout = checkout_date_iso(r)
+        if checkout and checkout < today_iso:
+            past.append(r)
+        else:
+            upcoming.append(r)
+    return past, upcoming
 
 
 def handle_cancellation(reservation_id: str, meta: dict) -> None:
@@ -642,19 +614,25 @@ def handle_cancellation(reservation_id: str, meta: dict) -> None:
         if event is not None:
             fields = parse_event_description(event.get("description", ""))
             service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
-    send_cancel_push(reservation_id, fields, meta.get("checkin_date") or "")
+    # "방막기"(실제 손님 아님)는 캘린더 정리만 하고 손님 취소처럼 보이는 알림은 보내지 않는다.
+    if not is_room_block(reservation_id):
+        send_cancel_push(reservation_id, fields, meta.get("checkin_date") or "")
 
 
 def main() -> None:
     session = requests.Session()
     login(session)
 
-    raw_rows = fetch_active_reservation_rows(session)
-    confirmed = [r for r in raw_rows if is_confirmed(r["status"])]
-    # 취소된 예약은 애초에 목록 응답에서 빠지지만, 입실완료(체크인 완료)로 넘어간 예약은
-    # 그대로 남아있다. 그래서 취소 판정 기준은 confirmed가 아니라 raw_rows 전체여야
-    # "예약완료 -> 입실완료" 전환을 취소로 오판하지 않는다.
-    active_ids = {r["id"] for r in raw_rows}
+    # 신규/취소 감지 공통 기준: "예약현황" 메뉴와 완전히 같은, 상태/날짜 필터 없는 전체
+    # 목록(전 페이지). 접수는 며칠 전에 했지만 오늘 막 입금 확인돼 확정된 손님도, 체크인이
+    # 몇 달 뒤인 겨울 장박 손님도 놓치지 않기 위해 날짜로 범위를 좁히지 않고 전체를 본다.
+    # "방막기"(관리자가 손님 예약을 막으려 잠가둔 행, 실제 손님 아님)만 걸러낸다.
+    all_rows = [r for r in fetch_reservation_rows(session) if not is_room_block(r["id"])]
+    confirmed = [r for r in all_rows if is_confirmed(r["status"])]
+    # 이 목록엔 취소된 행도 상태 텍스트("환불 취소"/"운영 취소"/"자동 취소"/"취소 완료")만
+    # 바뀐 채 그대로 남아있으므로(사라지지 않음), 취소 판정 기준은 confirmed가 아니라
+    # "취소 상태가 아닌 모든 행"이어야 "예약완료 -> 입실완료" 전환을 취소로 오판하지 않는다.
+    active_ids = {r["id"] for r in all_rows if not is_cancelled_status(r["status"])}
     notified = load_notified_ids()
 
     if SEED_ONLY:
@@ -666,8 +644,17 @@ def main() -> None:
         save_notified_ids(notified)
         return
 
-    new_ones = [r for r in confirmed if r["id"] not in notified]
+    raw_new_ones = [r for r in confirmed if r["id"] not in notified]
+    past_new_ones, new_ones = split_past_checkin(raw_new_ones)
     changed = False
+
+    if past_new_ones:
+        # 체크인일이 이미 지난 건 알림/캘린더 없이 조용히 기록만 해서 다음 실행부터
+        # 반복 검사 대상에서 빠지게 한다 (SEED_ONLY와 같은 null-event 패턴).
+        for r in past_new_ones:
+            notified[r["id"]] = {"event_id": None, "checkin_date": checkin_date_iso(r)}
+        changed = True
+        print(f"체크인일이 이미 지난 신규 후보 {len(past_new_ones)}건은 조용히 기록만 함 (알림/캘린더 없음)")
 
     print(f"확인된 예약완료 건수: {len(confirmed)}, 신규: {len(new_ones)}")
     if len(new_ones) > MAX_NEW_PER_RUN:

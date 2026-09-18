@@ -41,9 +41,11 @@
 3. 화면에 표시된 JSON 값을 복사해서 기기별로 모아둔다 (다음 단계에서 사용)
 
 ### 4. 예약 관리자 페이지의 정확한 URL (확인 완료)
-"예약현황" 목록에서 상태 필터를 "예약완료"(`status=1`)로 걸었을 때의 실제 URL을 확인해서
-`scripts/check_reservations.py`의 `LIST_URL` 기본값에 반영해뒀다. 별도로 `LIST_URL` 시크릿을
-등록하지 않아도 이 기본값이 사용된다 (등록하면 그 값이 우선).
+좌측 메뉴 "예약현황"이 여는, 상태/날짜 필터가 전혀 없는 목록 URL(`dispYeyakAdminResList`)을
+`scripts/check_reservations.py`의 `LIST_URL` 기본값에 반영해뒀다 (2026-09-18: 예전엔
+`status=1` 필터를 건 URL을 썼는데, 이러면 취소된 예약이 목록에서 아예 사라져서 상태 텍스트로
+취소 여부를 구분할 수 없었다. 지금은 전체를 받아와서 코드에서 직접 상태를 판별한다).
+별도로 `LIST_URL` 시크릿을 등록하지 않아도 이 기본값이 사용된다 (등록하면 그 값이 우선).
 
 ### 5. 구글 캘린더 연동 설정 (서비스 계정 방식, 토큰 갱신 불필요)
 1. [Google Cloud Console](https://console.cloud.google.com)에서 새 프로젝트 생성 (무료)
@@ -63,7 +65,7 @@
 | `ADMIN_ID` | 예약 관리자 로그인 아이디 |
 | `ADMIN_PW` | 예약 관리자 로그인 비밀번호 |
 | `LOGIN_URL` | (4번에서 확인한 로그인 URL, 기본값과 다르면) |
-| `LIST_URL` | (4번에서 확인한 예약완료 목록 URL) |
+| `LIST_URL` | (4번에서 확인한 예약현황 목록 URL) |
 | `VAPID_PRIVATE_KEY` | `secrets.local.md` 참고 |
 | `VAPID_SUBJECT` | `secrets.local.md` 참고 |
 | `PUSH_SUBSCRIPTIONS` | 3번에서 기기별로 모은 JSON을 배열로 묶은 문자열 (기기 1대면 `[ {...} ]`, 여러 대면 `[ {...}, {...} ]`) |
