@@ -3,8 +3,12 @@
 
 GitHub Actions는 이 사이트에서 차단되어 있어(IP 문제), 실제 스케줄 실행은
 이 컴퓨터(Mac)에서 launchd로 돌린다. secrets.local.md와 local-secrets/의
-서비스 계정 키를 읽어 환경변수로 세팅한 뒤 check_reservations.main()을
-호출하고, 상태 파일이 바뀌었으면 git에 커밋/푸시한다.
+서비스 계정 키를 읽어 환경변수로 세팅한 뒤 sync_dashboard_calendar.main()을
+호출한다.
+
+예전엔 check_reservations(예약 1건=일정 1개 + 웹푸시 + 상태파일 커밋)를 돌렸지만,
+2026-10-03부터는 대시보드 집계를 그대로 캘린더에 반영하는 방식으로 바꿨다.
+그래서 웹푸시와 notified_ids.json 커밋/푸시는 더 이상 하지 않는다(캘린더가 곧 상태다).
 
 배터리 절약(2026-09-18 사용자 요청): 맥이 켜져 있어도 사람이 자리를 비워
 키보드/마우스 입력이 없으면(=화면만 켜둔 채 방치) 사이트 로그인/전체 스캔
@@ -17,7 +21,6 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_FILE = os.path.join(ROOT, "data", "notified_ids.json")
 IDLE_THRESHOLD_SECONDS = int(os.environ.get("IDLE_THRESHOLD_SECONDS", "600"))
 
 
@@ -38,33 +41,11 @@ def load_secrets() -> None:
         txt = f.read()
     os.environ["ADMIN_ID"] = re.search(r"ADMIN_ID: (\S+)", txt).group(1)
     os.environ["ADMIN_PW"] = re.search(r"ADMIN_PW: (\S+)", txt).group(1)
-    os.environ["VAPID_PRIVATE_KEY"] = re.search(r"VAPID_PRIVATE_KEY: (\S+)", txt).group(1)
-    os.environ["VAPID_SUBJECT"] = re.search(r"VAPID_SUBJECT: (\S+)", txt).group(1)
-
-    subs_match = re.search(r"등록된 값\(배열\):\s*```\s*(\[.*?\])\s*```", txt, re.S)
-    if subs_match:
-        os.environ["PUSH_SUBSCRIPTIONS"] = subs_match.group(1)
 
     with open(os.path.join(ROOT, "local-secrets", "service-account.json"), encoding="utf-8") as f:
         os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = f.read()
     # 이 저장소는 공개라서 캘린더 ID(=개인 이메일)를 코드에 두지 않고 secrets.local.md에서 읽는다.
     os.environ["GOOGLE_CALENDAR_ID"] = re.search(r"GOOGLE_CALENDAR_ID: (\S+@\S+)", txt).group(1)
-    os.environ["STATE_FILE"] = STATE_FILE
-
-
-def git(*args: str) -> None:
-    subprocess.run(["git", *args], cwd=ROOT, check=True)
-
-
-def commit_state_if_changed() -> None:
-    diff = subprocess.run(
-        ["git", "diff", "--quiet", "--", STATE_FILE], cwd=ROOT
-    )
-    if diff.returncode == 0:
-        return  # 변경 없음
-    git("add", STATE_FILE)
-    git("commit", "-m", "chore: update notified reservation ids (local)")
-    git("push")
 
 
 def main() -> None:
@@ -75,10 +56,9 @@ def main() -> None:
 
     load_secrets()
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
-    import check_reservations as cr
+    import sync_dashboard_calendar as sync
 
-    cr.main()
-    commit_state_if_changed()
+    sync.run(apply_changes=True)
 
 
 if __name__ == "__main__":
